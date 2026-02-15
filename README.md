@@ -29,15 +29,15 @@ Verification links:
 
 ```mermaid
 flowchart TD
-    A[Client App / Human Operator] -->|HTTPS| B[robomoustach.io API]
-    C[AI Agent<br/>AgentKit / ACP] -->|discover + score/report| B
-    C -->|optional direct read| D[TrustScore.sol<br/>Base Mainnet]
+    A["Client App / Human Operator"] -->|HTTPS| B["robomoustach.io API"]
+    C["AI Agent\nAgentKit / ACP"] -->|discover + score/report| B
+    C -->|optional direct read| D["TrustScore.sol\nBase Mainnet"]
 
     B -->|read score/report| D
-    B -->|serves metadata| E[/discover]
+    B -->|serves metadata| E["/discover"]
 
-    F[Indexer cron<br/>15 min] -->|read FeedbackPosted events| G[ERC-8004 Reputation Registry]
-    F -->|scoreFeedback logic| H[scoring.js]
+    F["Indexer cron\n15 min"] -->|read FeedbackPosted events| G["ERC-8004 Reputation Registry"]
+    F -->|scoreFeedback logic| H["scoring.js"]
     H -->|batchUpdateScores (max 100)| D
 ```
 
