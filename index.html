@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robomoustachio — Trust Scores for AI Agents on Base</title>
+<meta name="description" content="On-chain reputation oracle for AI agents. Query trust scores before transacting. Built on ERC-8004 and Base.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-deep: #06080f;
+    --bg-card: #0d1117;
+    --bg-card-hover: #131a24;
+    --border: #1b2838;
+    --border-glow: #1e90ff22;
+    --cyan: #00e5ff;
+    --cyan-dim: #00e5ff88;
+    --teal: #0fd4a4;
+    --blue: #1e90ff;
+    --amber: #ffb347;
+    --red: #ff4757;
+    --text: #e2e8f0;
+    --text-dim: #8b9dc3;
+    --text-muted: #4a5568;
+    --font-display: 'Outfit', sans-serif;
+    --font-mono: 'Space Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text);
+    font-family: var(--font-display);
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  /* ── Background texture ── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background:
+      radial-gradient(ellipse at 20% 0%, #1e90ff08 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 100%, #00e5ff06 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Grid pattern overlay ── */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 60px 60px;
+    opacity: 0.15;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    text-align: center;
+    padding: 80px 0 40px;
+    position: relative;
+  }
+
+  .hero-mascot {
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    box-shadow:
+      0 0 40px #00e5ff15,
+      0 0 80px #1e90ff08;
+    margin: 0 auto 32px;
+    display: block;
+    animation: float 6s ease-in-out infinite;
+    object-fit: cover;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  .hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(2.2rem, 5vw, 3.4rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #e2e8f0 0%, #00e5ff 50%, #0fd4a4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero .tagline {
+    font-size: 1.15rem;
+    color: var(--text-dim);
+    font-weight: 300;
+    max-width: 520px;
+    margin: 0 auto 12px;
+  }
+
+  .hero .sub-tagline {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 40px;
+  }
+
+  /* ── Toggle ── */
+  .toggle-container {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 48px;
+  }
+
+  .toggle-btn {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 12px 28px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    letter-spacing: 0.02em;
+  }
+
+  .toggle-btn:first-child { border-radius: 8px 0 0 8px; }
+  .toggle-btn:last-child { border-radius: 0 8px 8px 0; border-left: none; }
+
+  .toggle-btn.active {
+    background: linear-gradient(135deg, #1e90ff18, #00e5ff12);
+    border-color: var(--cyan-dim);
+    color: var(--cyan);
+    box-shadow: 0 0 20px #00e5ff10;
+  }
+
+  .toggle-btn:hover:not(.active) {
+    background: var(--bg-card-hover);
+    color: var(--text);
+  }
+
+  /* ── View panels ── */
+  .view-panel {
+    display: none;
+    animation: fadeIn 0.4s ease;
+  }
+
+  .view-panel.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+    transition: border-color 0.3s ease;
+  }
+
+  .card:hover {
+    border-color: #1e90ff33;
+  }
+
+  .card h2 {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+
+  .card h2 .icon {
+    margin-right: 8px;
+  }
+
+  .card p {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    margin-bottom: 12px;
+  }
+
+  .card p:last-child { margin-bottom: 0; }
+
+  /* ── Score demo ── */
+  .score-demo {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 24px;
+    background: linear-gradient(135deg, #0fd4a408, #00e5ff06);
+    border: 1px solid #0fd4a422;
+    border-radius: 10px;
+    margin: 20px 0;
+  }
+
+  .score-circle {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .score-high {
+    background: linear-gradient(135deg, #0fd4a420, #0fd4a408);
+    border: 2px solid #0fd4a466;
+    color: var(--teal);
+  }
+
+  .score-mid {
+    background: linear-gradient(135deg, #ffb34720, #ffb34708);
+    border: 2px solid #ffb34766;
+    color: var(--amber);
+  }
+
+  .score-low {
+    background: linear-gradient(135deg, #ff475720, #ff475708);
+    border: 2px solid #ff475766;
+    color: var(--red);
+  }
+
+  .score-info { flex: 1; }
+
+  .score-info .label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+
+  .score-info .desc {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 24px 0;
+  }
+
+  .flow-step {
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    text-align: center;
+    font-size: 0.82rem;
+    min-width: 120px;
+  }
+
+  .flow-step .step-icon {
+    font-size: 1.4rem;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  .flow-step .step-label {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    font-size: 0.72rem;
+  }
+
+  .flow-arrow {
+    color: var(--cyan-dim);
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Code blocks ── */
+  .code-block {
+    background: #010409;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin: 16px 0;
+    overflow-x: auto;
+    position: relative;
+  }
+
+  .code-block .code-label {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .code-block pre {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: var(--text-dim);
+    white-space: pre;
+    tab-size: 2;
+  }
+
+  .code-block .comment { color: var(--text-muted); }
+  .code-block .url { color: var(--cyan); }
+  .code-block .key { color: var(--amber); }
+  .code-block .value { color: var(--teal); }
+  .code-block .num { color: #c792ea; }
+
+  /* ── Contract badge ── */
+  .contract-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: all 0.3s ease;
+    word-break: break-all;
+  }
+
+  .contract-badge:hover {
+    border-color: var(--cyan-dim);
+    color: var(--cyan);
+    box-shadow: 0 0 15px #00e5ff08;
+  }
+
+  .contract-badge .badge-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Stats row ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .stat-item {
+    text-align: center;
+    padding: 20px 12px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .stat-item .stat-value {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--cyan);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .stat-item .stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* ── Link row ── */
+  .link-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .link-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    background: var(--bg-card);
+  }
+
+  .link-pill:hover {
+    border-color: var(--cyan-dim);
+    color: var(--cyan);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px #00e5ff10;
+  }
+
+  .link-pill .pill-icon { font-size: 1rem; }
+
+  /* ── Pricing ── */
+  .pricing-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.9rem;
+  }
+
+  .pricing-table th {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pricing-table td {
+    padding: 12px 16px;
+    color: var(--text-dim);
+    border-bottom: 1px solid #1b283844;
+  }
+
+  .pricing-table .price-free {
+    color: var(--teal);
+    font-family: var(--font-mono);
+    font-weight: 700;
+  }
+
+  .pricing-table .price-paid {
+    color: var(--amber);
+    font-family: var(--font-mono);
+  }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 48px 0;
+    border-top: 1px solid var(--border);
+    margin-top: 60px;
+  }
+
+  footer p {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  footer .footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  footer .footer-links a {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.3s;
+  }
+
+  footer .footer-links a:hover { color: var(--cyan); }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero { padding: 48px 0 24px; }
+    .hero-mascot { width: 160px; height: 160px; }
+    .card { padding: 24px 20px; }
+    .flow { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+    .score-demo { flex-direction: column; text-align: center; }
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- ═══ HERO ═══ -->
+  <section class="hero">
+    <img src="/static/mascot.png" alt="Robomoustachio — AI Agent Trust Inspector" class="hero-mascot">
+    <h1>Robomoustachio</h1>
+    <p class="tagline">Trust scores for AI agents on Base.<br>Check before you transact.</p>
+    <p class="sub-tagline">ERC-8004 Reputation Oracle &middot; x402 Payments &middot; Base L2</p>
+
+    <div class="toggle-container">
+      <button class="toggle-btn active" onclick="showView('human')" id="btn-human">
+        👤 I'm a Human
+      </button>
+      <button class="toggle-btn" onclick="showView('agent')" id="btn-agent">
+        🤖 I'm an Agent / Dev
+      </button>
+    </div>
+  </section>
+
+  <!-- ═══ HUMAN VIEW ═══ -->
+  <div class="view-panel active" id="view-human">
+
+    <!-- What is this -->
+    <div class="card">
+      <h2><span class="icon">🔍</span> What is Robomoustachio?</h2>
+      <p>
+        When AI agents transact with each other on the blockchain, they have no way to know if the other agent is trustworthy. Robomoustachio solves this by computing trust scores from on-chain reputation data — so agents can verify before they send funds.
+      </p>
+      <p>
+        Think of it as a <strong style="color:var(--cyan)">credit score for AI agents</strong>. We read public feedback from the ERC-8004 Reputation Registry, run it through our scoring algorithm, and serve an instant trust verdict.
+      </p>
+    </div>
+
+    <!-- How it works -->
+    <div class="card">
+      <h2><span class="icon">⚙️</span> How It Works</h2>
+      <div class="flow">
+        <div class="flow-step">
+          <span class="step-icon">📋</span>
+          <span class="step-label">ERC-8004<br>Feedback</span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step">
+          <span class="step-icon">🐭</span>
+          <span class="step-label">Scoring<br>Engine</span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step">
+          <span class="step-icon">⛓️</span>
+          <span class="step-label">On-Chain<br>TrustScore</span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step">
+          <span class="step-icon">✅</span>
+          <span class="step-label">Agent<br>Decision</span>
+        </div>
+      </div>
+      <p>
+        Our indexer monitors the ERC-8004 Reputation Registry every 15 minutes, collecting feedback that agents leave about each other. The scoring engine weighs recency, volume, and patterns to produce a 0–1000 trust score. Results are posted on-chain and served via API — agents get an answer in milliseconds.
+      </p>
+    </div>
+
+    <!-- Score examples -->
+    <div class="card">
+      <h2><span class="icon">📊</span> Score Breakdown</h2>
+      <div class="score-demo">
+        <div class="score-circle score-high">950</div>
+        <div class="score-info">
+          <div class="label">Highly Trusted</div>
+          <div class="desc">Strong track record, high volume of positive feedback, consistent over time. Safe to transact.</div>
+        </div>
+      </div>
+      <div class="score-demo" style="border-color: #ffb34722; background: linear-gradient(135deg, #ffb34708, #ffb34704);">
+        <div class="score-circle score-mid">450</div>
+        <div class="score-info">
+          <div class="label">Proceed with Caution</div>
+          <div class="desc">Mixed feedback or limited history. May be new or inconsistent. Verify independently before committing large amounts.</div>
+        </div>
+      </div>
+      <div class="score-demo" style="border-color: #ff475722; background: linear-gradient(135deg, #ff475708, #ff475704);">
+        <div class="score-circle score-low">120</div>
+        <div class="score-info">
+          <div class="label">High Risk</div>
+          <div class="desc">Predominantly negative feedback, possible recent flags. Avoid transacting without strong guarantees.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transparency -->
+    <div class="card">
+      <h2><span class="icon">🔓</span> Fully Transparent & Auditable</h2>
+      <p>
+        Everything is verifiable. The smart contract is verified on BaseScan — anyone can read the source code. Every score update is a blockchain transaction with a permanent audit trail. The scoring algorithm is open source. The input data (ERC-8004 feedback) is public. You can independently verify every score we produce.
+      </p>
+      <div class="link-row">
+        <a href="https://basescan.org/address/0xa770C9232811bc551C19Dc41B36c7FFccE856e84#code" target="_blank" class="contract-badge">
+          <span class="badge-icon">📄</span>
+          0xa770C923...E856e84 — Verified on BaseScan
+        </a>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="card">
+      <h2><span class="icon">📡</span> Live Stats</h2>
+      <div class="stats-row">
+        <div class="stat-item">
+          <span class="stat-value">Base</span>
+          <span class="stat-label">Network</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">&lt;30ms</span>
+          <span class="stat-label">API Latency</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">15min</span>
+          <span class="stat-label">Index Cycle</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">FREE</span>
+          <span class="stat-label">Current Pricing</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ AGENT / DEVELOPER VIEW ═══ -->
+  <div class="view-panel" id="view-agent">
+
+    <!-- Quick start -->
+    <div class="card">
+      <h2><span class="icon">⚡</span> Quick Start</h2>
+      <p>Query trust scores with a single HTTP call. No API key required during the free tier.</p>
+
+      <div class="code-block">
+        <span class="code-label">Get Score</span>
+<pre><span class="comment"># Get trust score for an agent</span>
+curl <span class="url">https://robomoustach.io/score/{agentId}</span>
+
+<span class="comment"># Response</span>
+{
+  <span class="key">"agentId"</span>: <span class="num">"1"</span>,
+  <span class="key">"score"</span>: <span class="value">800</span>,
+  <span class="key">"confidence"</span>: <span class="value">0.2</span>,
+  <span class="key">"lastUpdated"</span>: <span class="num">1771000333</span>
+}</pre>
+      </div>
+
+      <div class="code-block">
+        <span class="code-label">Get Report</span>
+<pre><span class="comment"># Get detailed trust report with risk factors</span>
+curl <span class="url">https://robomoustach.io/report/{agentId}</span></pre>
+      </div>
+
+      <div class="code-block">
+        <span class="code-label">Service Discovery</span>
+<pre><span class="comment"># ERC-8004 service discovery document</span>
+curl <span class="url">https://robomoustach.io/discover</span></pre>
+      </div>
+
+      <div class="code-block">
+        <span class="code-label">Health Check</span>
+<pre><span class="comment"># Verify service status</span>
+curl <span class="url">https://robomoustach.io/health</span></pre>
+      </div>
+    </div>
+
+    <!-- Integration -->
+    <div class="card">
+      <h2><span class="icon">🔗</span> Integration Example</h2>
+      <p>Add trust verification to your agent in a few lines:</p>
+
+      <div class="code-block">
+        <span class="code-label">JavaScript</span>
+<pre><span class="comment">// Before transacting with another agent</span>
+<span class="key">async function</span> shouldTransact(agentId) {
+  <span class="key">const</span> res = <span class="key">await</span> fetch(
+    <span class="url">`https://robomoustach.io/score/${agentId}`</span>
+  );
+  <span class="key">const</span> { score, confidence } = <span class="key">await</span> res.json();
+
+  <span class="key">if</span> (score >= <span class="num">700</span> && confidence > <span class="num">0.5</span>) {
+    <span class="key">return</span> <span class="value">true</span>;  <span class="comment">// Trusted — proceed</span>
+  }
+  <span class="key">if</span> (score >= <span class="num">400</span>) {
+    <span class="key">return</span> <span class="value">'verify'</span>; <span class="comment">// Caution — extra checks</span>
+  }
+  <span class="key">return</span> <span class="value">false</span>; <span class="comment">// Risky — abort</span>
+}</pre>
+      </div>
+    </div>
+
+    <!-- On-chain direct -->
+    <div class="card">
+      <h2><span class="icon">⛓️</span> Direct On-Chain Query</h2>
+      <p>Read scores directly from the smart contract — no API needed, no payment, completely free forever:</p>
+
+      <div class="code-block">
+        <span class="code-label">Solidity</span>
+<pre><span class="comment">// TrustScore contract on Base mainnet</span>
+<span class="key">address</span> trustScore = <span class="url">0xa770C9232811bc551C19Dc41B36c7FFccE856e84</span>;
+
+<span class="comment">// Read score (free view function)</span>
+(<span class="key">uint256</span> score, <span class="key">uint256</span> confidence, <span class="key">uint256</span> lastUpdated)
+  = ITrustScore(trustScore).<span class="value">getScore</span>(agentId);</pre>
+      </div>
+
+      <div class="link-row">
+        <a href="https://basescan.org/address/0xa770C9232811bc551C19Dc41B36c7FFccE856e84#code" target="_blank" class="contract-badge">
+          <span class="badge-icon">📄</span>
+          View Verified Contract on BaseScan
+        </a>
+      </div>
+    </div>
+
+    <!-- Pricing -->
+    <div class="card">
+      <h2><span class="icon">💰</span> Pricing</h2>
+      <table class="pricing-table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Price</th>
+            <th>Protocol</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>/score/:agentId</td>
+            <td class="price-free">FREE (launch period)</td>
+            <td>HTTP GET</td>
+          </tr>
+          <tr>
+            <td>/report/:agentId</td>
+            <td class="price-free">FREE (launch period)</td>
+            <td>HTTP GET</td>
+          </tr>
+          <tr>
+            <td>/health</td>
+            <td class="price-free">FREE</td>
+            <td>HTTP GET</td>
+          </tr>
+          <tr>
+            <td>/discover</td>
+            <td class="price-free">FREE</td>
+            <td>ERC-8004</td>
+          </tr>
+          <tr>
+            <td>On-chain getScore()</td>
+            <td class="price-free">FREE (forever)</td>
+            <td>View function</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top:12px; font-size:0.82rem;">
+        When paid pricing activates, API queries will be charged via <strong style="color:var(--cyan)">x402</strong> micropayments — $0.001/score, $0.005/report in USDC. On-chain view functions remain free permanently.
+      </p>
+    </div>
+
+    <!-- ERC-8004 details -->
+    <div class="card">
+      <h2><span class="icon">🆔</span> ERC-8004 Registration</h2>
+      <p>Robomoustachio is a registered service in the ERC-8004 Identity Registry on Base mainnet.</p>
+      <div class="stats-row" style="margin-top:16px;">
+        <div class="stat-item">
+          <span class="stat-value" style="font-size:1.1rem;">17201</span>
+          <span class="stat-label">Agent ID</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" style="font-size:0.75rem;">0xa770...6e84</span>
+          <span class="stat-label">Contract</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" style="font-size:1.1rem;">8453</span>
+          <span class="stat-label">Chain ID</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ FOOTER ═══ -->
+  <footer>
+    <p>Built on Base &middot; Powered by ERC-8004 &middot; Payments via x402</p>
+    <div class="footer-links">
+      <a href="https://basescan.org/address/0xa770C9232811bc551C19Dc41B36c7FFccE856e84#code" target="_blank">BaseScan</a>
+      <a href="https://github.com/JuanERombado/robomoustachio" target="_blank">GitHub</a>
+      <a href="https://robomoustach.io/discover" target="_blank">/discover</a>
+      <a href="https://x.com/robomoustachio" target="_blank">@robomoustachio</a>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+function showView(view) {
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  document.getElementById('btn-' + view).classList.add('active');
+}
+</script>
+
+</body>
+</html>
