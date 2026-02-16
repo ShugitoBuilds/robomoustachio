@@ -8,7 +8,7 @@ const { ethers } = require("ethers");
 const { loadScoringConfigFromEnv } = require("./scoring");
 const { createRequestLoggerMiddleware } = require("./requestLogger");
 const { buildRegistrationDocument, formatUsdPrice } = require("./registration");
-const { createPaymentMiddleware } = require("./paymentMiddleware");
+const { createPaymentMiddleware, extractPaymentHeaders, hasPaymentProof } = require("./paymentMiddleware");
 const { validateAgentIdParam } = require("./validation");
 
 const TRUST_SCORE_ABI = [
@@ -19,6 +19,23 @@ const TRUST_SCORE_ABI = [
 function toPositiveInt(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function toBoolean(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
 }
 
 function toBigInt(value) {
@@ -141,6 +158,78 @@ function buildRiskReport({ parsedRecord, scoringConfig, pollIntervalMs }) {
   };
 }
 
+function isDemoRequest(req) {
+  const value = String(req.query?.demo || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function resolveVerdict(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) {
+    return "UNKNOWN";
+  }
+  if (score > 700) {
+    return "TRUSTED";
+  }
+  if (score >= 400) {
+    return "CAUTION";
+  }
+  return "DANGEROUS";
+}
+
+function resolveConfidenceBand(totalFeedback) {
+  if (totalFeedback >= 50) {
+    return "high";
+  }
+  if (totalFeedback > 0) {
+    return "low";
+  }
+  return "none";
+}
+
+function resolvePaidRouteAccess({ req, res, env, payment }) {
+  if (payment.usingRealMiddleware) {
+    return {
+      allowFullResponse: true,
+      allowDemoResponse: false,
+    };
+  }
+
+  const allowDemoQuery = toBoolean(env.X402_ALLOW_DEMO_QUERY, true);
+  const shouldRequireHeader = Boolean(payment.fallbackFromReal) || toBoolean(env.X402_STUB_ENFORCE, false);
+  const paid = hasPaymentProof(extractPaymentHeaders(req));
+
+  if (paid) {
+    res.locals.paymentStatus = "paid_stub";
+    return {
+      allowFullResponse: true,
+      allowDemoResponse: false,
+    };
+  }
+
+  if (allowDemoQuery && isDemoRequest(req)) {
+    res.locals.paymentStatus = "demo_free";
+    return {
+      allowFullResponse: false,
+      allowDemoResponse: true,
+    };
+  }
+
+  if (shouldRequireHeader) {
+    return {
+      allowFullResponse: false,
+      allowDemoResponse: false,
+      paymentRequired: true,
+      paymentReason:
+        "x402 middleware is running in stub fallback mode. Include an x402 payment header for full data, or add ?demo=true for a limited free response.",
+    };
+  }
+
+  return {
+    allowFullResponse: true,
+    allowDemoResponse: false,
+  };
+}
+
 function createApp(env = process.env) {
   const app = express();
   const port = toPositiveInt(env.PORT, 3000);
@@ -153,6 +242,7 @@ function createApp(env = process.env) {
     mode: env.X402_MODE || "auto",
     routeConfig: routePricing,
     enforceStubPayment: env.X402_STUB_ENFORCE || "false",
+    env,
   });
 
   app.disable("x-powered-by");
@@ -167,6 +257,7 @@ function createApp(env = process.env) {
       payment: {
         mode: payment.mode,
         usingRealMiddleware: payment.usingRealMiddleware,
+        fallbackFromReal: Boolean(payment.fallbackFromReal),
         reason: payment.reason,
       },
       trustScore: {
@@ -182,6 +273,17 @@ function createApp(env = process.env) {
 
   app.get("/score/:agentId", validateAgentIdParam, async (req, res, next) => {
     try {
+      const access = resolvePaidRouteAccess({ req, res, env, payment });
+      if (access.paymentRequired) {
+        return res.status(402).json({
+          error: "Payment required",
+          route: "GET /score/:agentId",
+          price: routePricing["GET /score/:agentId"].price,
+          network: routePricing["GET /score/:agentId"].network,
+          details: access.paymentReason,
+        });
+      }
+
       if (!trustScoreReader.enabled) {
         return res.status(503).json({
           error: "TrustScore contract is not configured",
@@ -195,6 +297,18 @@ function createApp(env = process.env) {
       const confidenceThreshold = Number(scoringConfig.confidenceThresholdFeedbackCount) || 1;
       const confidence = Math.min(1, Number(parsedRecord.totalFeedback) / confidenceThreshold);
 
+      if (access.allowDemoResponse) {
+        return res.json({
+          demo: true,
+          agentId: req.agentId.toString(),
+          score: Number(parsedRecord.score),
+          verdict: resolveVerdict(Number(parsedRecord.score)),
+          confidenceBand: resolveConfidenceBand(Number(parsedRecord.totalFeedback)),
+          note: "Demo response only. Provide an x402 payment header for the full paid payload.",
+        });
+      }
+
+      res.locals.paymentStatus = payment.usingRealMiddleware ? "paid_real" : "paid_stub";
       return res.json({
         agentId: req.agentId.toString(),
         score: Number(parsedRecord.score),
@@ -203,6 +317,18 @@ function createApp(env = process.env) {
       });
     } catch (error) {
       if (isCallException(error)) {
+        const access = resolvePaidRouteAccess({ req, res, env, payment });
+        if (access.allowDemoResponse) {
+          return res.json({
+            demo: true,
+            agentId: req.agentId.toString(),
+            score: null,
+            verdict: "UNKNOWN",
+            confidenceBand: "none",
+            note: "No on-chain history yet. Demo response returned without payment.",
+          });
+        }
+
         return res.status(404).json({
           error: "Score not found for agent",
           agentId: req.agentId.toString(),
@@ -214,6 +340,17 @@ function createApp(env = process.env) {
 
   app.get("/report/:agentId", validateAgentIdParam, async (req, res, next) => {
     try {
+      const access = resolvePaidRouteAccess({ req, res, env, payment });
+      if (access.paymentRequired) {
+        return res.status(402).json({
+          error: "Payment required",
+          route: "GET /report/:agentId",
+          price: routePricing["GET /report/:agentId"].price,
+          network: routePricing["GET /report/:agentId"].network,
+          details: access.paymentReason,
+        });
+      }
+
       if (!trustScoreReader.enabled) {
         return res.status(503).json({
           error: "TrustScore contract is not configured",
@@ -225,6 +362,19 @@ function createApp(env = process.env) {
       const parsedRecord = parseRecord(report);
       const analytics = buildRiskReport({ parsedRecord, scoringConfig, pollIntervalMs });
 
+      if (access.allowDemoResponse) {
+        return res.json({
+          demo: true,
+          agentId: req.agentId.toString(),
+          score: Number(parsedRecord.score),
+          verdict: resolveVerdict(Number(parsedRecord.score)),
+          confidenceBand: resolveConfidenceBand(Number(parsedRecord.totalFeedback)),
+          flagged: analytics.flagged,
+          note: "Demo response only. Provide an x402 payment header for the full paid payload.",
+        });
+      }
+
+      res.locals.paymentStatus = payment.usingRealMiddleware ? "paid_real" : "paid_stub";
       return res.json({
         agentId: req.agentId.toString(),
         score: Number(parsedRecord.score),
@@ -239,6 +389,19 @@ function createApp(env = process.env) {
       });
     } catch (error) {
       if (isCallException(error)) {
+        const access = resolvePaidRouteAccess({ req, res, env, payment });
+        if (access.allowDemoResponse) {
+          return res.json({
+            demo: true,
+            agentId: req.agentId.toString(),
+            score: null,
+            verdict: "UNKNOWN",
+            confidenceBand: "none",
+            flagged: false,
+            note: "No on-chain history yet. Demo response returned without payment.",
+          });
+        }
+
         return res.status(404).json({
           error: "Report not found for agent",
           agentId: req.agentId.toString(),

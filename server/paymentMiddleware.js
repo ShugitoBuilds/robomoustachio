@@ -2,6 +2,23 @@
 
 const { formatUsdPrice } = require("./registration");
 
+function toBoolean(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
 function routeToRegex(routePath) {
   return new RegExp(
     `^${routePath
@@ -65,9 +82,115 @@ function hasPaymentProof(headers) {
   );
 }
 
+function parseRouteKey(key) {
+  const trimmed = String(key || "").trim();
+  const [method = "", ...pathParts] = trimmed.split(" ");
+  const routePath = pathParts.join(" ").trim();
+  return {
+    key: trimmed,
+    method: method.toUpperCase(),
+    routePath,
+  };
+}
+
+function toX402RoutePath(routePath) {
+  return String(routePath || "").replace(/:([A-Za-z0-9_]+)/g, "[$1]");
+}
+
+function buildX402RouteConfig(routeConfig) {
+  const mapped = {};
+  for (const [key, config] of Object.entries(routeConfig || {})) {
+    const parsed = parseRouteKey(key);
+    if (!parsed.method || !parsed.routePath) {
+      continue;
+    }
+
+    const routeLevelConfig = { ...(config || {}) };
+    const nestedConfig = { ...(routeLevelConfig.config || {}) };
+
+    if (routeLevelConfig.description && !nestedConfig.description) {
+      nestedConfig.description = routeLevelConfig.description;
+    }
+    if (routeLevelConfig.mimeType && !nestedConfig.mimeType) {
+      nestedConfig.mimeType = routeLevelConfig.mimeType;
+    }
+    if (routeLevelConfig.resource && !nestedConfig.resource) {
+      nestedConfig.resource = routeLevelConfig.resource;
+    }
+    if (routeLevelConfig.maxTimeoutSeconds && !nestedConfig.maxTimeoutSeconds) {
+      nestedConfig.maxTimeoutSeconds = routeLevelConfig.maxTimeoutSeconds;
+    }
+
+    mapped[`${parsed.method} ${toX402RoutePath(parsed.routePath)}`] = {
+      price: formatUsdPrice(routeLevelConfig.price),
+      network: routeLevelConfig.network || "base",
+      config: nestedConfig,
+    };
+  }
+  return mapped;
+}
+
+function isValidEvmAddress(address) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(address || ""));
+}
+
+function normalizePrivateKeyValue(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.includes("\\n") ? value.replace(/\\n/g, "\n") : value;
+}
+
+function resolvePayToAddress(options = {}, env = process.env) {
+  const candidates = [
+    options.payTo,
+    env.X402_PAY_TO,
+    env.X402_RECEIVER_ADDRESS,
+    env.DEPLOYER_ADDRESS,
+    env.UPDATER_ADDRESS,
+  ];
+  for (const candidate of candidates) {
+    if (isValidEvmAddress(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    "Missing pay-to address for x402 middleware. Set X402_PAY_TO (or X402_RECEIVER_ADDRESS / DEPLOYER_ADDRESS)."
+  );
+}
+
+function resolveFacilitatorConfig(env = process.env) {
+  const { createFacilitatorConfig, facilitator } = require("@coinbase/x402");
+  const apiKeyId = env.CDP_API_KEY_ID || env.CDP_API_KEY_NAME || "";
+  const apiKeySecret = normalizePrivateKeyValue(env.CDP_API_KEY_SECRET || env.CDP_API_KEY_PRIVATE || "");
+
+  if (apiKeyId && apiKeySecret) {
+    return createFacilitatorConfig(apiKeyId, apiKeySecret);
+  }
+
+  return facilitator;
+}
+
+function resolvePaywallConfig(env = process.env) {
+  const paywallConfig = {};
+  if (env.CDP_CLIENT_API_KEY) {
+    paywallConfig.cdpClientKey = env.CDP_CLIENT_API_KEY;
+  }
+  if (env.X402_PAYWALL_APP_NAME) {
+    paywallConfig.appName = env.X402_PAYWALL_APP_NAME;
+  }
+  if (env.X402_PAYWALL_APP_LOGO) {
+    paywallConfig.appLogo = env.X402_PAYWALL_APP_LOGO;
+  }
+  if (env.X402_PAYWALL_SESSION_TOKEN_ENDPOINT) {
+    paywallConfig.sessionTokenEndpoint = env.X402_PAYWALL_SESSION_TOKEN_ENDPOINT;
+  }
+  return Object.keys(paywallConfig).length > 0 ? paywallConfig : undefined;
+}
+
 function createStubPaymentMiddleware(options = {}) {
   const paidRoutes = buildPaidRoutes(options.routeConfig);
-  const enforceStubPayment = String(options.enforceStubPayment || "false").toLowerCase() === "true";
+  const enforceStubPayment = toBoolean(options.enforceStubPayment, false);
 
   const middleware = function stubPaymentMiddleware(req, res, next) {
     const matchedRoute = matchPaidRoute(req, paidRoutes);
@@ -104,94 +227,68 @@ function createStubPaymentMiddleware(options = {}) {
   return {
     mode: "stub",
     usingRealMiddleware: false,
+    fallbackFromReal: false,
     reason: "Using local x402 stub middleware",
     middleware,
   };
 }
 
-function getRealPaymentMiddlewareFactory() {
-  const candidates = [
-    () => {
-      const mod = require("@coinbase/x402");
-      return mod.paymentMiddleware;
-    },
-    () => {
-      const mod = require("@coinbase/x402/express");
-      return mod.paymentMiddleware || mod.default;
-    },
-    () => {
-      const mod = require("@coinbase/x402-express");
-      return mod.paymentMiddleware || mod.default;
-    },
-    () => {
-      const mod = require("@x402/express");
-      return mod.paymentMiddleware || mod.default;
-    },
-  ];
-
-  for (const getFactory of candidates) {
-    try {
-      const factory = getFactory();
-      if (typeof factory === "function") {
-        return factory;
-      }
-    } catch {
-      // Try next candidate.
-    }
+function createRealPaymentMiddleware(options = {}, env = process.env) {
+  const { paymentMiddleware } = require("x402-express");
+  if (typeof paymentMiddleware !== "function") {
+    throw new Error("x402-express.paymentMiddleware export was not found");
   }
-  return null;
+
+  const x402RouteConfig = buildX402RouteConfig(options.routeConfig || {});
+  const payToAddress = resolvePayToAddress(options, env);
+  const facilitatorConfig = resolveFacilitatorConfig(env);
+  const paywallConfig = resolvePaywallConfig(env);
+
+  const middleware = paymentMiddleware(payToAddress, x402RouteConfig, facilitatorConfig, paywallConfig);
+  if (typeof middleware !== "function") {
+    throw new Error("x402-express did not return a middleware function");
+  }
+
+  return {
+    mode: "real",
+    usingRealMiddleware: true,
+    fallbackFromReal: false,
+    reason: "Using x402-express middleware with Coinbase facilitator",
+    middleware,
+    payToAddress,
+  };
 }
 
 function createPaymentMiddleware(options = {}) {
+  const env = options.env || process.env;
   const routeConfig = options.routeConfig || {};
-  const mode = String(options.mode || process.env.X402_MODE || "auto").toLowerCase();
+  const mode = String(options.mode || env.X402_MODE || "auto").toLowerCase();
   const shouldTryReal = mode === "real" || mode === "auto";
 
   if (shouldTryReal) {
-    const paymentMiddlewareFactory = getRealPaymentMiddlewareFactory();
-    if (paymentMiddlewareFactory) {
-      try {
-        const realMiddleware = paymentMiddlewareFactory(routeConfig);
-        if (typeof realMiddleware === "function") {
-          return {
-            mode: "real",
-            usingRealMiddleware: true,
-            reason: "Using @coinbase/x402 middleware",
-            middleware: (req, res, next) => {
-              if (!res.locals.paymentStatus) {
-                res.locals.paymentStatus = "x402_pending";
-              }
-              return realMiddleware(req, res, next);
-            },
-          };
-        }
-      } catch (error) {
-        if (mode === "real") {
-          throw error;
-        }
-        return {
-          ...createStubPaymentMiddleware(options),
-          reason: `Fell back to stub middleware: ${error.message}`,
-        };
+    try {
+      return createRealPaymentMiddleware({ ...options, routeConfig }, env);
+    } catch (error) {
+      if (mode === "real") {
+        throw error;
       }
+      return {
+        ...createStubPaymentMiddleware(options),
+        fallbackFromReal: true,
+        reason: `Fell back to stub middleware: ${error.message}`,
+      };
     }
-
-    if (mode === "real") {
-      throw new Error("X402 middleware requested in real mode but no compatible factory was found");
-    }
-
-    return {
-      ...createStubPaymentMiddleware(options),
-      reason: "Fell back to stub middleware: no compatible x402 express middleware factory found",
-    };
   }
 
   return createStubPaymentMiddleware(options);
 }
 
 module.exports = {
+  buildX402RouteConfig,
   createPaymentMiddleware,
+  createRealPaymentMiddleware,
   createStubPaymentMiddleware,
   extractPaymentHeaders,
   hasPaymentProof,
+  resolvePayToAddress,
 };

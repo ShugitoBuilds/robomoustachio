@@ -11,6 +11,7 @@
     "test:integration": "hardhat test test/integration.test.js",
     "start:api": "node server/server.js",
     "test:client": "node scripts/test-client.js",
+    "test:x402-dry-run": "node scripts/test-x402-dry-run.js",
     "indexer": "node server/indexer.js",
     "deploy:mock-identity:base-sepolia": "hardhat run scripts/deploy-mock-identity.js --network baseSepolia",
     "seed:score:base-sepolia": "hardhat run scripts/seed-score.js --network baseSepolia",
@@ -25,7 +26,8 @@
     "dotenv": "^16.4.5",
     "ethers": "^6.13.5",
     "express": "^4.21.2",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "x402-express": "^1.1.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
