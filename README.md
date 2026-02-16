@@ -201,20 +201,41 @@ npm run seed:test-agents:base-mainnet
 | `/score/:agentId` | `GET` | Trust score + confidence |
 | `/report/:agentId` | `GET` | Full risk report |
 
-## Current Payment Mode Note
+## Current Payment Mode
 
-The service advertises x402 pricing (`$0.001 /score`, `$0.005 /report`), but current runtime may fall back to stub middleware when a compatible x402 express middleware factory is unavailable.
+Production is configured for real x402 middleware on Base mainnet.
 
-Check actual runtime mode:
+Quick check:
 
 ```bash
 curl "https://robomoustach.io/health"
+curl -i -H "Accept: application/json" "https://robomoustach.io/score/1"
 ```
 
-Look at:
-- `payment.mode`
-- `payment.usingRealMiddleware`
-- `payment.reason`
+Expected:
+- `/health` includes `payment.mode: "real"` and `payment.usingRealMiddleware: true`
+- `/score/:agentId` returns `402` without `X-PAYMENT`, with `accepts` payment requirements
+
+## Real Paid x402 Test
+
+Use the included script to execute one real paid request end-to-end.
+
+1. Add to `.env`:
+   - `X402_TEST_PRIVATE_KEY` (funded Base wallet with ETH + USDC)
+   - optional `X402_TEST_URL` (default `https://robomoustach.io/score/1`)
+   - optional `X402_TEST_RPC_URL` (defaults to `BASE_MAINNET_RPC_URL`)
+   - optional `X402_MAX_PAYMENT_ATOMIC` (default `20000`, i.e. `0.02 USDC`)
+2. Run:
+
+```bash
+npm run test:x402-paid
+```
+
+The script will:
+- preflight unauthenticated request (expects `402`)
+- pay via x402 and retry automatically
+- require `X-PAYMENT-RESPONSE` on success
+- print decoded settlement metadata and response body
 
 ## Security Notes
 

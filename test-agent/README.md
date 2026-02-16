@@ -22,6 +22,7 @@ Minimal AgentKit bot that:
    - `CDP_WALLET_SECRET` (recommended for AgentKit v2 wallet provider)
    - `TRUST_ORACLE_BASE_URL=https://robomoustach.io`
    - `TRUST_AGENT_IDS=2,3,5,6`
+   - `OUTPUT_MODE=demo` (clean, recording-friendly output)
    - Optional: `AGENTKIT_ALLOW_LEGACY_FALLBACK=true`
 3. Run:
    ```bash
@@ -29,3 +30,14 @@ Minimal AgentKit bot that:
    ```
 
 The script stores/reuses wallet metadata in `wallet-state.json`.
+
+## Output Modes
+
+- `OUTPUT_MODE=demo`:
+  - concise human-readable output
+  - color-coded trust decisions
+  - no large JSON dump at the end
+  - optional compact HTTP lines (`OUTPUT_SHOW_HTTP=true`)
+- `OUTPUT_MODE=debug`:
+  - full HTTP/body trace logs
+  - prints full JSON summary

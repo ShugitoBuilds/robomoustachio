@@ -14,6 +14,50 @@ const WALLET_STATE_PATH = path.join(THIS_DIR, "wallet-state.json");
 dotenv.config({ path: ROOT_ENV_PATH });
 dotenv.config({ path: LOCAL_ENV_PATH, override: true });
 
+function isTrue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function buildOutputConfig(env = process.env) {
+  const mode = String(env.OUTPUT_MODE || "demo").trim().toLowerCase();
+  const useColor = !isTrue(env.NO_COLOR) && env.OUTPUT_COLOR !== "false" && process.stdout.isTTY;
+  const showHttpSummary = mode === "debug" || !String(env.OUTPUT_SHOW_HTTP || "true").trim().toLowerCase().startsWith("f");
+  return {
+    mode: mode === "debug" ? "debug" : "demo",
+    useColor,
+    verboseHttp: mode === "debug" || isTrue(env.OUTPUT_VERBOSE_HTTP),
+    printJsonSummary: mode === "debug" || isTrue(env.OUTPUT_PRINT_JSON_SUMMARY),
+    showHttpSummary,
+  };
+}
+
+const OUTPUT = buildOutputConfig(process.env);
+
+const ANSI = {
+  reset: "\u001b[0m",
+  bold: "\u001b[1m",
+  cyan: "\u001b[36m",
+  green: "\u001b[32m",
+  yellow: "\u001b[33m",
+  red: "\u001b[31m",
+  gray: "\u001b[90m",
+};
+
+function paint(text, color, output = OUTPUT) {
+  if (!output.useColor || !color || !ANSI[color]) {
+    return text;
+  }
+  return `${ANSI[color]}${text}${ANSI.reset}`;
+}
+
+function paintBold(text, output = OUTPUT) {
+  if (!output.useColor) {
+    return text;
+  }
+  return `${ANSI.bold}${text}${ANSI.reset}`;
+}
+
 function timestamp() {
   return new Date().toISOString();
 }
@@ -43,6 +87,26 @@ function confidenceLabel(confidence) {
     return "medium";
   }
   return "low";
+}
+
+function decisionTier(decision) {
+  return String(decision || "").split(",")[0].trim();
+}
+
+function decisionTag(decision) {
+  const tier = decisionTier(decision);
+  if (tier === "TRUSTED") return "[OK]";
+  if (tier === "RISKY") return "[WARN]";
+  if (tier === "DANGEROUS") return "[BLOCK]";
+  return "[INFO]";
+}
+
+function decisionColor(decision) {
+  const tier = decisionTier(decision);
+  if (tier === "TRUSTED") return "green";
+  if (tier === "RISKY") return "yellow";
+  if (tier === "DANGEROUS") return "red";
+  return "cyan";
 }
 
 function classifyDecision({ score, totalFeedback, confidence }) {
@@ -115,7 +179,7 @@ function resolveCdpConfig() {
   return { apiKeyId, apiKeySecret, walletSecret };
 }
 
-async function initAgentKitWallet() {
+async function initAgentKitWallet(output = OUTPUT) {
   const cdpConfig = resolveCdpConfig();
   const networkId = process.env.AGENTKIT_NETWORK_ID || "base-mainnet";
   const defaultIdempotencyKey = "8e03978e-40d5-43e8-bc93-6894a57f9324";
@@ -175,15 +239,20 @@ async function initAgentKitWallet() {
   };
   await saveWalletState(nextState);
 
-  console.log(`[${timestamp()}] AgentKit wallet ready (${walletProviderType}) on ${networkId}: ${address}`);
+  if (output.verboseHttp) {
+    console.log(`[${timestamp()}] AgentKit wallet ready (${walletProviderType}) on ${networkId}: ${address}`);
+  } else {
+    console.log(`${paint("[wallet]", "cyan", output)} ${walletProviderType} ${paint(address, "gray", output)}`);
+  }
   return nextState;
 }
 
-async function requestWithTrace(url) {
+async function requestWithTrace(url, context = {}, output = OUTPUT) {
   const startedAt = timestamp();
   const startedMs = Date.now();
-
-  console.log(`[${startedAt}] -> GET ${url}`);
+  if (output.verboseHttp) {
+    console.log(`[${startedAt}] -> GET ${url}`);
+  }
 
   const response = await fetch(url, {
     method: "GET",
@@ -219,23 +288,57 @@ async function requestWithTrace(url) {
     },
   };
 
-  console.log(`[${endedAt}] <- ${response.status} ${url} (${durationMs}ms)`);
-  console.log(`[${endedAt}] body: ${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}`);
+  if (output.verboseHttp) {
+    console.log(`[${endedAt}] <- ${response.status} ${url} (${durationMs}ms)`);
+    console.log(`[${endedAt}] body: ${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}`);
+  } else if (output.showHttpSummary && context.agentId && context.routeName) {
+    console.log(
+      `  ${paint("[http]", "gray", output)} agent ${context.agentId} ${context.routeName} -> ${response.status} (${durationMs}ms)`
+    );
+  }
 
   return trace;
 }
 
+function printDemoHeader(baseUrl, agentIds, output = OUTPUT) {
+  if (output.verboseHttp) {
+    return;
+  }
+  console.log(paintBold("RoboMoustachio Trust Demo", output));
+  console.log(`${paint("[target]", "cyan", output)} ${baseUrl}`);
+  console.log(`${paint("[agents]", "cyan", output)} ${agentIds.join(", ")}`);
+  console.log("");
+}
+
+function countByTier(evaluations) {
+  const counts = { TRUSTED: 0, RISKY: 0, DANGEROUS: 0, UNKNOWN: 0 };
+  for (const item of evaluations) {
+    const tier = decisionTier(item.decision);
+    if (counts[tier] !== undefined) {
+      counts[tier] += 1;
+    }
+  }
+  return counts;
+}
+
 async function main() {
-  const wallet = await initAgentKitWallet();
+  const runStartedMs = Date.now();
+  const wallet = await initAgentKitWallet(OUTPUT);
 
   const baseUrl = stripTrailingSlash(process.env.TRUST_ORACLE_BASE_URL || "https://robomoustach.io");
   const agentIds = parseAgentIds();
   const evaluations = [];
   const traces = {};
 
+  printDemoHeader(baseUrl, agentIds, OUTPUT);
+
   for (const agentId of agentIds) {
-    const scoreTrace = await requestWithTrace(`${baseUrl}/score/${agentId}`);
-    const reportTrace = await requestWithTrace(`${baseUrl}/report/${agentId}`);
+    const scoreTrace = await requestWithTrace(`${baseUrl}/score/${agentId}`, { agentId, routeName: "/score" }, OUTPUT);
+    const reportTrace = await requestWithTrace(
+      `${baseUrl}/report/${agentId}`,
+      { agentId, routeName: "/report" },
+      OUTPUT
+    );
     traces[agentId] = { score: scoreTrace, report: reportTrace };
 
     let scoreValue = toScore(scoreTrace.response.body && scoreTrace.response.body.score);
@@ -269,7 +372,9 @@ async function main() {
     });
 
     const line = `Checking Agent ${agentId}... Score: ${scoreValue}, Confidence: ${confidence} -> ${decision}`;
-    console.log(line);
+    const tag = decisionTag(decision);
+    const color = decisionColor(decision);
+    console.log(`${paint(tag, color, OUTPUT)} ${line}`);
     evaluations.push({
       agentId,
       score: scoreValue,
@@ -288,7 +393,18 @@ async function main() {
     traces,
   };
 
-  console.log(JSON.stringify(summary, null, 2));
+  const counts = countByTier(evaluations);
+  const totalDurationMs = Date.now() - runStartedMs;
+  console.log("");
+  console.log(
+    `${paint("[summary]", "cyan", OUTPUT)} TRUSTED=${counts.TRUSTED} RISKY=${counts.RISKY} DANGEROUS=${counts.DANGEROUS} UNKNOWN=${counts.UNKNOWN} (${totalDurationMs}ms)`
+  );
+
+  if (OUTPUT.printJsonSummary) {
+    console.log(JSON.stringify(summary, null, 2));
+  } else {
+    console.log(`${paint("[tip]", "gray", OUTPUT)} set OUTPUT_MODE=debug for full JSON trace`);
+  }
 }
 
 main().catch((error) => {

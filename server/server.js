@@ -232,6 +232,7 @@ function resolvePaidRouteAccess({ req, res, env, payment }) {
 
 function createApp(env = process.env) {
   const app = express();
+  app.set("trust proxy", 1);
   const port = toPositiveInt(env.PORT, 3000);
   const pollIntervalMs = toPositiveInt(env.INDEXER_POLL_INTERVAL_MS, 900_000);
   const scoringConfig = loadScoringConfigFromEnv(env);
