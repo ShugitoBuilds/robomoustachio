@@ -2,6 +2,7 @@
 
 require("dotenv").config();
 
+const path = require("node:path");
 const express = require("express");
 const { ethers } = require("ethers");
 
@@ -257,6 +258,7 @@ function createApp(env = process.env) {
 
   app.disable("x-powered-by");
   app.use(express.json());
+  app.use(express.static(path.resolve(__dirname, "..", "public")));
   app.use(createRequestLoggerMiddleware({ logFilePath: env.REQUEST_LOG_FILE }));
   app.use(payment.middleware);
 
