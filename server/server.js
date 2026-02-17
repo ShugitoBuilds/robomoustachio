@@ -230,6 +230,15 @@ function resolvePaidRouteAccess({ req, res, env, payment }) {
   };
 }
 
+function buildResponseMeta() {
+  return {
+    provider: "Robomoustachio",
+    service: "ERC-8004 Trust Oracle",
+    discover: "https://robomoustach.io/discover",
+    note: "Verify any agent's trust score before transacting. Free on-chain queries, premium API via x402.",
+  };
+}
+
 function createApp(env = process.env) {
   const app = express();
   app.set("trust proxy", 1);
@@ -306,6 +315,7 @@ function createApp(env = process.env) {
           verdict: resolveVerdict(Number(parsedRecord.score)),
           confidenceBand: resolveConfidenceBand(Number(parsedRecord.totalFeedback)),
           note: "Demo response only. Provide an x402 payment header for the full paid payload.",
+          meta: buildResponseMeta(),
         });
       }
 
@@ -315,6 +325,7 @@ function createApp(env = process.env) {
         score: Number(parsedRecord.score),
         confidence: Number(confidence.toFixed(4)),
         lastUpdated: asSafeNumber(parsedRecord.lastUpdated),
+        meta: buildResponseMeta(),
       });
     } catch (error) {
       if (isCallException(error)) {
@@ -327,6 +338,7 @@ function createApp(env = process.env) {
             verdict: "UNKNOWN",
             confidenceBand: "none",
             note: "No on-chain history yet. Demo response returned without payment.",
+            meta: buildResponseMeta(),
           });
         }
 
@@ -372,6 +384,7 @@ function createApp(env = process.env) {
           confidenceBand: resolveConfidenceBand(Number(parsedRecord.totalFeedback)),
           flagged: analytics.flagged,
           note: "Demo response only. Provide an x402 payment header for the full paid payload.",
+          meta: buildResponseMeta(),
         });
       }
 
@@ -387,6 +400,7 @@ function createApp(env = process.env) {
         riskFactors: analytics.riskFactors,
         negativeRateBps: analytics.negativeRateBps,
         lastUpdated: asSafeNumber(parsedRecord.lastUpdated),
+        meta: buildResponseMeta(),
       });
     } catch (error) {
       if (isCallException(error)) {
@@ -400,6 +414,7 @@ function createApp(env = process.env) {
             confidenceBand: "none",
             flagged: false,
             note: "No on-chain history yet. Demo response returned without payment.",
+            meta: buildResponseMeta(),
           });
         }
 
