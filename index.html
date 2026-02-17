@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Robomoustachio — Trust Scores for AI Agents on Base</title>
 <meta name="description" content="On-chain reputation oracle for AI agents. Query trust scores before transacting. Built on ERC-8004 and Base.">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=3">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon.png?v=3">
+<link rel="shortcut icon" href="/favicon.ico?v=3">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -637,7 +641,7 @@
           <span class="stat-label">Index Cycle</span>
         </div>
         <div class="stat-item">
-          <span class="stat-value">FREE</span>
+          <span class="stat-value">LIVE</span>
           <span class="stat-label">Current Pricing</span>
         </div>
       </div>
@@ -651,7 +655,7 @@
     <!-- Quick start -->
     <div class="card">
       <h2><span class="icon">⚡</span> Quick Start</h2>
-      <p>Query trust scores with a single HTTP call. No API key required during the free tier.</p>
+      <p>Query trust scores with a single HTTP call. Use <code>?demo=true</code> for a free demo response, or pay via x402 for full responses.</p>
 
       <div class="code-block">
         <span class="code-label">Get Score</span>
@@ -683,6 +687,37 @@ curl <span class="url">https://robomoustach.io/discover</span></pre>
         <span class="code-label">Health Check</span>
 <pre><span class="comment"># Verify service status</span>
 curl <span class="url">https://robomoustach.io/health</span></pre>
+      </div>
+    </div>
+
+    <!-- Integration guide -->
+    <div class="card">
+      <h2><span class="icon">🧭</span> Integration Guide</h2>
+      <p>Three ways to query trust scores, ordered by simplicity:</p>
+
+      <p><strong style="color:var(--cyan)">1) Direct HTTP (no wallet needed)</strong><br>
+      For agents that only need a quick read during evaluation. Use <code>?demo=true</code> for limited free responses.</p>
+      <div class="code-block">
+        <span class="code-label">HTTP Demo</span>
+<pre>curl <span class="url">https://robomoustach.io/score/1?demo=true</span></pre>
+      </div>
+
+      <p><strong style="color:var(--cyan)">2) x402 via fetch with private key (recommended for paid tier)</strong><br>
+      For agents with a funded wallet. Recommended: Bankr-powered payment flows or any headless x402 fetch client. Works on any platform: no Electron, no awal, no companion process.</p>
+      <div class="code-block">
+        <span class="code-label">JavaScript x402</span>
+<pre><span class="key">const</span> response = <span class="key">await</span> x402Fetch(<span class="url">"https://robomoustach.io/score/1"</span>, {
+  <span class="key">privateKey</span>: process.env.PRIVATE_KEY,
+  <span class="key">rpcUrl</span>: <span class="url">"https://mainnet.base.org"</span>,
+  <span class="key">maxPayment</span>: <span class="num">20000</span>
+});</pre>
+      </div>
+
+      <p><strong style="color:var(--cyan)">3) On-chain direct read (fully decentralized, always free)</strong><br>
+      Call <code>getScore(agentId)</code> directly on the TrustScore contract. No API, no middleman.</p>
+      <div class="code-block">
+        <span class="code-label">Contract</span>
+<pre>0xa770C9232811bc551C19Dc41B36c7FFccE856e84</pre>
       </div>
     </div>
 
@@ -748,12 +783,22 @@ curl <span class="url">https://robomoustach.io/health</span></pre>
         <tbody>
           <tr>
             <td>/score/:agentId</td>
-            <td class="price-free">FREE (launch period)</td>
+            <td class="price-paid">$0.001 (x402)</td>
             <td>HTTP GET</td>
           </tr>
           <tr>
             <td>/report/:agentId</td>
-            <td class="price-free">FREE (launch period)</td>
+            <td class="price-paid">$0.005 (x402)</td>
+            <td>HTTP GET</td>
+          </tr>
+          <tr>
+            <td>/score/:agentId?demo=true</td>
+            <td class="price-free">FREE (demo, limited)</td>
+            <td>HTTP GET</td>
+          </tr>
+          <tr>
+            <td>/report/:agentId?demo=true</td>
+            <td class="price-free">FREE (demo, limited)</td>
             <td>HTTP GET</td>
           </tr>
           <tr>
@@ -774,7 +819,7 @@ curl <span class="url">https://robomoustach.io/health</span></pre>
         </tbody>
       </table>
       <p style="margin-top:12px; font-size:0.82rem;">
-        When paid pricing activates, API queries will be charged via <strong style="color:var(--cyan)">x402</strong> micropayments — $0.001/score, $0.005/report in USDC. On-chain view functions remain free permanently.
+        Live pricing is active via <strong style="color:var(--cyan)">x402</strong>: $0.001/score and $0.005/report in USDC. For onboarding/testing, add <code>?demo=true</code> to receive a limited free response. On-chain view functions remain free permanently.
       </p>
     </div>
 
