@@ -141,5 +141,5 @@ Integrate Robomoustachio with Coinbase AgentKit in a production-first layout (`s
 - [x] `src/agentkit/` exists and is production-ready.
 - [x] AgentKit actions return deterministic schema across success/failure.
 - [x] On-chain fallback behavior is scoped to `TrustScore` contract reads (no raw registry recomputation).
-- [ ] Docs are published and accurate before external PR/pitch.
+- [x] Docs are published and accurate before external PR/pitch.
 - [ ] 48h validation meets all reliability thresholds.
