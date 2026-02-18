@@ -1,161 +1,145 @@
-# AgentTrustScore Implementation Tasks
+# AgentKit Integration TASKS
 
-## Locked Product Decisions (Do Not Punt)
+## Scope
 
-1. Scoring constants are configurable, not hardcoded.
-   - `DECAY_WINDOW_DAYS` (start: `30`)
-   - `CONFIDENCE_THRESHOLD_FEEDBACK_COUNT` (start: `50`)
-   - `NEGATIVE_FLAG_THRESHOLD_BPS` (start: `2000`, i.e. 20%)
-   - These must be environment variables (off-chain) and/or constructor params (on-chain where relevant).
-   - Tune from production data later.
-2. Update cadence and batching:
-   - Indexer cron interval: every `15` minutes.
-   - Cap on-chain writes to `100` score updates per transaction.
-   - Queue overflow for next cycle.
-3. API pricing starts at:
-   - `/score`: `$0.001`
-   - `/report`: `$0.005`
-   - Keep configurable via env.
-4. Registry integration:
-   - Use mock contracts by default in development.
-   - Add config flag to switch to live ERC-8004 addresses.
-   - Live addresses sourced from official deployment announcements.
+Integrate Robomoustachio with Coinbase AgentKit in a production-first layout (`src/agentkit/`) and ship a stable developer path for:
 
-## Phase 1: Smart Contract (Start Here)
+1. Direct HTTP demo reads (`?demo=true`)
+2. x402 paid reads (headless signer/private key)
+3. Direct on-chain fallback reads from `TrustScore`
 
-- [x] Initialize Hardhat JS project (`hardhat`, `@nomicfoundation/hardhat-toolbox`, `ethers`, `openzeppelin`).
-- [x] Implement `contracts/interfaces/IERC8004ReputationRegistry.sol` (minimal read interface).
-- [x] Implement `contracts/TrustScore.sol` with:
-  - [x] `TrustScore` storage mapping by `agentId`
-  - [x] Struct fields: `score`, `totalFeedback`, `positiveFeedback`, `lastUpdated`, `exists`
-  - [x] `owner`, `updater`, `queryFee`, registry address
-  - [x] `getScore(agentId)` view
-  - [x] `getDetailedReport(agentId)` view
-  - [x] `updateScore(...)` onlyUpdater
-  - [x] `batchUpdateScores(...)` onlyUpdater
-  - [x] `setUpdater`, `setFee`, `withdraw`, optional registry setter
-  - [x] Payable query path that emits `ScoreQueried`
-  - [x] OpenZeppelin `Ownable`, custom errors, NatSpec docs
-- [x] Add `contracts/mocks/MockIdentityRegistry.sol` for local/testing.
-- [x] Add `test/TrustScore.test.js`:
-  - [x] access control
-  - [x] score bounds and feedback consistency checks
-  - [x] batch update behavior and length mismatch reverts
-  - [x] paid query and fee withdrawal
-  - [x] agent registration validation with mock registry
-- [x] Add `scripts/deploy.js` for Base Sepolia deployment.
-- [x] Add `scripts/verify.js` scaffold for BaseScan verification.
-- [ ] Exit criteria:
-  - [x] all contract tests pass locally
-  - [ ] deployment script runs against local network
+## Locked Decisions (Do Not Re-Interpret)
 
-## Phase 2: Scoring Engine (Pure Off-chain Logic)
+- [ ] Place all new integration code under `src/agentkit/` (not `test-agent/`).
+- [ ] Keep integration as a module loaded by the existing API runtime.
+- [ ] Do not add a new PM2 worker unless we intentionally add proactive/scheduled behavior later.
+- [ ] Use curated fixture agent IDs for demo stability; do not depend on random live registry quality for demo success.
+- [ ] Graceful degradation is required: every failure path must return structured output, not throw.
 
-- [x] Implement `server/scoring.js` pure deterministic function.
-- [x] Inputs include all tunable constants from env/config.
-- [x] Algorithm:
-  - [x] base ratio score (0-1000)
-  - [x] recent feedback weighted 2x for last 30 days (configurable window)
-  - [x] confidence multiplier if feedback count >= threshold
-  - [x] recent negative-rate flag (7-day window + threshold bps)
-- [x] Add `test/scoring.test.js` for edge cases and parameterized fixtures.
-- [ ] Exit criteria:
-  - [x] full unit test pass
-  - [x] constants can be changed without code edits
+## Canonical Response Contract (AgentKit-Facing)
 
-## Phase 3: Indexer
+- [ ] Define shared output schema in `src/agentkit/types.js` (or plain JS schema constants):
+  - [ ] `status`: `ok | degraded | error`
+  - [ ] `agentId`
+  - [ ] `score` (number or `null`)
+  - [ ] `confidence` (number or `null`)
+  - [ ] `verdict` (`TRUSTED | CAUTION | DANGEROUS | UNKNOWN`)
+  - [ ] `recommendation` (`proceed | manual_review | abort`)
+  - [ ] `source` (`api_demo | api_paid | trustscore_contract`)
+  - [ ] `fallback` (nullable code)
+  - [ ] `error` (nullable object)
+  - [ ] `timingMs`
 
-- [x] Implement `server/indexer.js`:
-  - [x] connect to Base RPC
-  - [x] read feedback events incrementally
-  - [x] checkpoint `lastProcessedBlock`
-  - [x] aggregate dirty `agentId`s
-  - [x] compute scores via `scoring.js`
-  - [x] write via `batchUpdateScores` with max 100 updates/tx
-  - [x] queue overflow for next cycle
-  - [x] retry/backoff + logging
-- [x] Add config switch `USE_MOCK_REGISTRY` and address map per network.
-- [x] Add integration test with mock registry and local chain.
-- [ ] Exit criteria:
-  - [x] event -> score update e2e path verified
-  - [x] resumable after restart
+## Fallback Semantics (Critical Clarification)
 
-## Phase 4: x402 API
+- [ ] **On-chain fallback means reading `TrustScore` contract only**, not recomputing from raw ERC-8004 feedback events.
+- [ ] Do not parse raw registry feedback for fallback scoring.
+- [ ] For `/score` fallback:
+  - [ ] call `TrustScore.getScore(agentId)`
+- [ ] For `/report` fallback:
+  - [ ] call `TrustScore.getDetailedReport(agentId)`
+  - [ ] derive minimal analytics client-side if needed, with explicit `source: trustscore_contract`
+- [ ] If API and contract are both unavailable, return:
+  - [ ] `{ score: null, fallback: "oracle_unavailable", recommendation: "manual_review" }`
 
-- [x] Implement `server/server.js` with Express.
-- [x] Add x402 middleware pricing via env:
-  - [x] `GET /score/:agentId` (`$0.001` default)
-  - [x] `GET /report/:agentId` (`$0.005` default)
-- [x] Add free `GET /health`.
-- [x] Add free `GET /discover` for agent capability discovery JSON.
-- [x] Read score/report data from deployed contract.
-- [x] Add request validation + error handling.
-- [x] Add request analytics logging (agentId, timestamp, payment status, response time) to file.
-- [x] Add local API test client script (`scripts/test-client.js`) for `/health`, `/score`, `/report`.
-- [ ] Exit criteria:
-  - [x] paid and free routes behave correctly
-  - [x] API schemas are stable and documented
+## Phase 1: Project Scaffolding
 
-## Phase 4.5: AgentKit Client Proof-of-Concept (Required)
+- [ ] Create `src/agentkit/` with:
+  - [ ] `src/agentkit/config.js`
+  - [ ] `src/agentkit/client.js`
+  - [ ] `src/agentkit/actions.js`
+  - [ ] `src/agentkit/fallbacks.js`
+  - [ ] `src/agentkit/fixtures/agents.json`
+  - [ ] `src/agentkit/demo-runner.js`
+- [ ] Add root scripts in `package.json`:
+  - [ ] `agentkit:demo`
+  - [ ] `agentkit:test`
+- [ ] Add env docs for AgentKit-specific vars in `.env.example`.
 
-- [ ] Create minimal Coinbase AgentKit bot client in `examples/agentkit-client/`.
-- [ ] Bot flow:
-  - [ ] discover endpoint config
-  - [ ] call `/score/:agentId`
-  - [ ] handle `402 Payment Required`
-  - [ ] complete x402 payment
-  - [ ] receive paid response
-- [ ] Add scriptable e2e test command for demo run.
-- [ ] Exit criteria:
-  - [ ] autonomous agent can pay and consume oracle endpoint end-to-end
+## Phase 2: Core AgentKit Client
 
-## Phase 5: Registration and Discovery
+- [ ] Implement `queryTrustScore(agentId, options)` in `src/agentkit/client.js`.
+- [ ] Implement `queryTrustReport(agentId, options)` in `src/agentkit/client.js`.
+- [ ] Implement `evaluateAgentRisk(agentId, options)` in `src/agentkit/actions.js`.
+- [ ] Add input guards (uint256 validation) before making network calls.
+- [ ] Normalize all successful and degraded responses to the canonical schema.
 
-- [x] Create ERC-8004 registration JSON.
-- [ ] Host metadata (IPFS + pinning).
-- [x] Register oracle service in Identity Registry (mock Base Sepolia flow complete).
-- [ ] Exit criteria:
-  - [x] service is discoverable with valid metadata and endpoints (via `/discover` + mock registry)
+## Phase 3: Query Modes
 
-## Phase 6: Deploy + Ops
+- [ ] Mode A (`api_demo`): `GET /score/:agentId?demo=true` and `GET /report/:agentId?demo=true`.
+- [ ] Mode B (`api_paid`): x402 fetch flow using private key signer and Base RPC.
+- [ ] Mode C (`trustscore_contract`): direct read from contract address `0xa770C9232811bc551C19Dc41B36c7FFccE856e84`.
+- [ ] Mode selection order:
+  - [ ] default: `api_paid`
+  - [ ] fallback 1: `api_demo` (if explicitly enabled)
+  - [ ] fallback 2: `trustscore_contract`
+  - [ ] final fallback: `oracle_unavailable`
 
-- [x] Prepare Base Sepolia deploy script with `.env` writeback for deployed addresses.
-- [x] Prepare score-seeding script for live API smoke tests.
-- [x] Prepare Identity Registry registration script (executes once registry address is available).
-- [x] Deploy to Base Sepolia (mainnet deployment pending).
-- [x] Verify contracts on BaseScan (Sepolia done).
-- [ ] Add monitoring:
-  - [ ] indexer lag
-  - [ ] tx failures
-  - [ ] API latency/error rates
-  - [ ] payment success rates
-- [ ] Add runbooks for key rotation, incident rollback, and missed-index recovery.
+## Phase 4: Failure-First Behavior
 
-## Environment Variables Checklist
+- [ ] Implement fallback mapper in `src/agentkit/fallbacks.js` with explicit codes:
+  - [ ] `oracle_unavailable`
+  - [ ] `api_timeout`
+  - [ ] `payment_unavailable`
+  - [ ] `rpc_unavailable`
+  - [ ] `agent_not_found`
+  - [ ] `invalid_agent_id`
+- [ ] Ensure every caught failure returns structured output and never uncaught throws from public actions.
+- [ ] Add correlation ID + timestamp to all degraded/error responses.
 
-- [ ] `BASE_SEPOLIA_RPC_URL`
-- [ ] `BASE_MAINNET_RPC_URL`
-- [ ] `API_RPC_URL`
-- [ ] `DEPLOYER_PRIVATE_KEY`
-- [ ] `UPDATER_PRIVATE_KEY`
-- [ ] `BASESCAN_API_KEY`
-- [ ] `CDP_API_KEY_NAME`
-- [ ] `CDP_API_KEY_PRIVATE`
-- [ ] `PORT`
-- [ ] `PUBLIC_BASE_URL`
-- [ ] `REQUEST_LOG_FILE`
-- [ ] `DECAY_WINDOW_DAYS=30`
-- [ ] `CONFIDENCE_THRESHOLD_FEEDBACK_COUNT=50`
-- [ ] `NEGATIVE_FLAG_THRESHOLD_BPS=2000`
-- [ ] `INDEXER_CRON_MINUTES=15`
-- [ ] `MAX_BATCH_SIZE=100`
-- [ ] `USE_MOCK_REGISTRY=true`
-- [ ] `INDEXER_POLL_INTERVAL_MS=900000`
-- [ ] `CHECKPOINT_FILE=./server/.indexer-checkpoint.json`
-- [ ] `RPC_BACKOFF_START_MS=1000`
-- [ ] `RPC_BACKOFF_MAX_MS=60000`
-- [ ] `X402_MODE=auto`
-- [ ] `X402_STUB_ENFORCE=false`
-- [ ] `X402_NETWORK=base`
-- [ ] `X402_SCORE_PRICE_USDC=0.001`
-- [ ] `X402_REPORT_PRICE_USDC=0.005`
+## Phase 5: Fixtures and Reproducible Demo
+
+- [ ] Populate `src/agentkit/fixtures/agents.json` with 3-5 curated real agent IDs and expected score bands.
+- [ ] Implement `src/agentkit/demo-runner.js` to iterate fixtures and print concise trust decisions.
+- [ ] Ensure demo is deterministic and independent from random registry discovery.
+- [ ] Keep optional live registry scan as separate script (non-blocking for core demo).
+
+## Phase 6: Tests
+
+- [ ] Unit tests:
+  - [ ] decision thresholds and verdict mapping
+  - [ ] response normalization
+  - [ ] fallback code mapping
+- [ ] Integration tests:
+  - [ ] demo path success
+  - [ ] paid x402 path success
+  - [ ] trustscore direct read success
+  - [ ] API 5xx -> graceful degradation
+  - [ ] timeout -> graceful degradation
+  - [ ] malformed agent ID -> structured validation error
+- [ ] Add test command to CI/local scripts (`agentkit:test`).
+
+## Phase 7: Docs-First Delivery
+
+- [ ] Create `docs/agentkit-integration.md` before final rollout.
+- [ ] Include copy/paste examples for:
+  - [ ] direct HTTP demo query
+  - [ ] x402 paid query with private key
+  - [ ] direct on-chain read fallback
+- [ ] Document full response schema, fallback codes, and recommended retry policy.
+- [ ] Update root `README.md` with AgentKit integration section linking to docs.
+
+## Phase 8: Rollout and 48h Validation
+
+- [ ] Deploy integration in passive/read mode first.
+- [ ] Run 48h observation with curated fixtures + small live sample.
+- [ ] Pass criteria (must be defined now, not after):
+  - [ ] `>= 99.0%` requests return a structured response (`ok`, `degraded`, or `error`)
+  - [ ] `p95 latency < 2000ms` for `queryTrustScore`
+  - [ ] `p95 latency < 2500ms` for `queryTrustReport`
+  - [ ] `0` unhandled throws in logs
+  - [ ] fallback responses include valid `fallback` code `100%` of the time
+- [ ] If any criterion fails, do not promote as recommended path; open remediation tasks.
+
+## Optional Phase 9: Proactive Worker (Only If Needed)
+
+- [ ] Decide if we need scheduled proactive scanning/alerts.
+- [ ] Only then introduce separate PM2 worker process for AgentKit automation.
+
+## Definition Of Done
+
+- [ ] `src/agentkit/` exists and is production-ready.
+- [ ] AgentKit actions return deterministic schema across success/failure.
+- [ ] On-chain fallback behavior is scoped to `TrustScore` contract reads (no raw registry recomputation).
+- [ ] Docs are published and accurate before external PR/pitch.
+- [ ] 48h validation meets all reliability thresholds.
